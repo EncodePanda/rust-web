@@ -23,8 +23,13 @@
 use axum::extract::State;
 #[allow(unused_imports)]
 use axum::{body::Body, http::Method, routing::*};
+use axum::extract::Path;
+use axum::Json;
 #[allow(unused_imports)]
 use hyper::Request;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use std::collections::HashMap;
 
 ///
 /// EXERCISE 1
@@ -42,11 +47,11 @@ async fn closure_shared_context() {
     /// for ServiceExt::oneshot
     use tower::util::ServiceExt;
 
-    let _gbp_to_usd_rate = 1.3;
+    let gbp_to_usd_rate = 1.3;
 
     let _app = Router::<()>::new()
-        .route("/usd_to_gbp", get(todo!("Make a closure")))
-        .route("/gbp_to_usd", get(todo!("Make a closure")));
+        .route("/usd_to_gbp", get(move |usd: String| async move { convert_usd_to_gbp(usd, gbp_to_usd_rate)}))
+        .route("/gbp_to_usd", get(move |usd: String| async move { convert_gbp_to_usd(usd, gbp_to_usd_rate)}));
 
     let response = _app
         .oneshot(
@@ -100,16 +105,28 @@ async fn shared_mutable_context() {
     /// for ServiceExt::oneshot
     use tower::util::ServiceExt;
 
-    let _gbp_to_usd_rate = 1.3;
+
+    let arc = Arc::new(Mutex::new(1.3));
+    // clone is user defined. new shadow copy with counter incremented
+    let arc_clone = arc.clone();
+
+    // let _gbp_to_usd_rate = arc;
 
     let _app = Router::<()>::new()
         .route(
             "/usd_to_gbp",
-            get(move |usd: String| async move { convert_usd_to_gbp(usd, _gbp_to_usd_rate) }),
+            get(move |usd: String| async move {
+		let guard = arc.lock().await;
+
+		convert_usd_to_gbp(usd, *guard)
+	    }),
         )
         .route(
             "/gbp_to_usd",
-            get(move |gbp: String| async move { convert_gbp_to_usd(gbp, _gbp_to_usd_rate) }),
+            get(move |gbp: String| async move {
+		let guard = arc_clone.lock().await;
+		convert_gbp_to_usd(gbp, *guard)
+	    }),
         );
 
     let response = _app
@@ -152,12 +169,12 @@ async fn state_shared_context() {
     /// for ServiceExt::oneshot
     use tower::util::ServiceExt;
 
-    let _gbp_to_usd_rate = 1.3;
+    let gbp_to_usd_rate = 1.3;
 
     let _app = Router::new()
         .route("/usd_to_gbp", get(usd_to_gbp_handler))
         .route("/gbp_to_usd", get(gbp_to_usd_handler))
-        .with_state(());
+        .with_state(gbp_to_usd_rate);
 
     let response = _app
         .oneshot(
@@ -176,11 +193,11 @@ async fn state_shared_context() {
 
     assert_eq!(_body_as_string, "130");
 }
-async fn usd_to_gbp_handler() -> String {
-    todo!("Use State to access the exchange rate")
+async fn usd_to_gbp_handler(State(rate): State<f64>, usd: String) -> String {
+    convert_usd_to_gbp(usd, rate)
 }
-async fn gbp_to_usd_handler() -> String {
-    todo!("Use State to access the exchange rate")
+async fn gbp_to_usd_handler(State(rate): State<f64>, gbp: String) -> String {
+    convert_gbp_to_usd(gbp, rate)
 }
 
 ///
@@ -199,35 +216,57 @@ async fn mutable_state_shared_context() {
     /// for ServiceExt::oneshot
     use tower::util::ServiceExt;
 
-    let _gbp_to_usd_rate = 1.3;
+    let gbp_to_usd_rate = Arc::new(Mutex::new(1.3));
 
     let _app = Router::new()
         .route("/usd_to_gbp", get(mutable_usd_to_gbp_handler))
         .route("/gbp_to_usd", get(mutable_gbp_to_usd_handler))
-        .with_state(());
+	.route("/set_rate", post(set_exchange_rate))
+        .with_state(gbp_to_usd_rate);
 
-    let response = _app
-        .oneshot(
-            Request::builder()
+    let request1 = Request::builder()
                 .method(Method::GET)
                 .uri("/usd_to_gbp")
                 .body(Body::from("100"))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+                .unwrap();
 
-    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let request2 = Request::builder()
+                .method(Method::POST)
+                .uri("/set_rate")
+                .body(Body::from("1.4"))
+                .unwrap();
+
+    let request3 = Request::builder()
+                .method(Method::GET)
+                .uri("/usd_to_gbp")
+                .body(Body::from("100"))
+                .unwrap();
+
+    let response1 =  _app.clone().oneshot(request1).await.unwrap();
+    let _response2 = _app.clone().oneshot(request2).await.unwrap();
+    let _response3 = _app.clone().oneshot(request3).await.unwrap();
+
+    let body = response1.into_body().collect().await.unwrap().to_bytes();
 
     let _body_as_string = String::from_utf8(body.to_vec()).unwrap();
 
-    assert_eq!(_body_as_string, "130");
+    assert_eq!(_body_as_string, "140");
 }
-async fn mutable_usd_to_gbp_handler() -> String {
-    todo!("Use State to access the exchange rate")
+
+async fn mutable_usd_to_gbp_handler(State(rate): State<Arc<Mutex<f64>>>, usd: String) -> String {
+    let guard = rate.lock().await;
+    convert_usd_to_gbp(usd, *guard)
 }
-async fn mutable_gbp_to_usd_handler() -> String {
-    todo!("Use State to access the exchange rate")
+async fn mutable_gbp_to_usd_handler(State(rate): State<Arc<Mutex<f64>>>, gbp: String) -> String {
+    let guard = rate.lock().await;
+    convert_gbp_to_usd(gbp, *guard)
+}
+
+async fn set_exchange_rate(State(rate): State<Arc<Mutex<f64>>>, body: String) -> () {
+    let new_val = body.parse::<f64>().unwrap();
+    let mut guard = rate.lock().await;
+
+    *guard = new_val;
 }
 
 ///
@@ -397,6 +436,63 @@ async fn extension_gbp_to_usd_handler() -> String {
 ///
 /// Place it into a web server and test to ensure it meets your requirements.
 ///
+
+struct UsersState {
+  users: Arc<Mutex<HashMap<u64, UserWithoutId>>>
+}
+
+
+#[derive(serde::Serialize, Clone)]
+struct User {
+  id: u64,
+  name: String,
+  email: String,
+}
+
+
+#[derive(serde::Deserialize, serde::Serialize, Clone)]
+struct UserWithoutId {
+  name: String,
+  email: String,
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+struct CreateUserResponse {
+    id: u64,
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Clone)]
+struct UpdateUserRequest {
+  id: u64,
+  name: String,
+  email: String,
+}
+
+async fn get_users() -> Json<Vec<User>> {
+  todo!("TODO")
+}
+
+async fn get_user(Path(_id): Path<u64>) -> Json<User> {
+  todo!("TODO")
+}
+
+async fn create_user(Json(_user): Json<UserWithoutId>) -> Json<CreateUserResponse> {
+  todo!("TODO")
+}
+
 async fn run_users_server() {
-    todo!("Implement the users API")
+    let app = Router::new()
+	.route("/users", get (get_users))
+	.route("/users/:id", get (get_user))
+	.route("/users/", post (create_user))
+	.with_state(());
+
+    // run it
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
+        .await
+        .unwrap();
+
+    println!("Listening on {}", listener.local_addr().unwrap());
+
+    axum::serve(listener, app).await.unwrap();
 }

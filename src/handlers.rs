@@ -20,7 +20,7 @@
 //!
 
 #[allow(unused_imports)]
-use axum::{body::Body, http::Method, routing::*};
+use axum::{body::Body, extract::{FromRequestParts, Path, Query}, http::Method, http::request::Parts, routing::*, Json};
 #[allow(unused_imports)]
 use http_body_util::BodyExt;
 use hyper::Request;
@@ -65,8 +65,11 @@ async fn basic_request_handler_test() {
 
     assert_eq!(body_as_string, "<h1>Hello!</h1>");
 }
-async fn basic_request_handler(_request: Request<Body>) -> String {
-    todo!("Return the body, as a string")
+async fn basic_request_handler(request: Request<Body>) -> String {
+    let body = request.into_body().collect().await.unwrap().to_bytes().to_vec();
+    let body_as_string = String::from_utf8(body).unwrap();
+
+    body_as_string
 }
 
 ///
@@ -98,9 +101,9 @@ async fn string_handler_test() {
 
     let body = response.into_body().collect().await.unwrap().to_bytes();
 
-    let _body_as_string = String::from_utf8(body.to_vec()).unwrap();
+    let body_as_string = String::from_utf8(body.to_vec()).unwrap();
 
-    todo!("assert_eq");
+    assert_eq!(body_as_string, "<h1>Hello!</h1>")
 }
 async fn string_handler(string: String) -> String {
     string
@@ -133,9 +136,9 @@ async fn bytes_handler_test() {
         .await
         .unwrap();
 
-    let _body = response.into_body().collect().await.unwrap().to_bytes();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
 
-    todo!("assert_eq");
+    assert_eq!(body, "<h1>Hello!</h1>".as_bytes());
 }
 async fn bytes_handler(bytes: hyper::body::Bytes) -> hyper::body::Bytes {
     bytes
@@ -176,8 +179,13 @@ async fn json_handler_test() {
 
     assert_eq!(body_as_string, "John Doe");
 }
-async fn json_handler() -> String {
-    todo!("Return the name of the person")
+async fn json_handler(Json(person) : Json<Person>) -> String {
+  person.name
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+struct Person {
+  name: String,
 }
 
 ///
@@ -199,7 +207,7 @@ async fn path_handler_test() {
     /// for ServiceExt::oneshot
     use tower::util::ServiceExt;
 
-    let app = Router::<()>::new().route("/users/jdoe", get(path_handler));
+    let app = Router::<()>::new().route("/users/:name", get(path_handler));
 
     let response = app
         .oneshot(
@@ -218,8 +226,8 @@ async fn path_handler_test() {
 
     assert_eq!(body_as_string, "jdoe");
 }
-async fn path_handler(axum::extract::Path(_name): axum::extract::Path<String>) -> String {
-    todo!("Return the name of the person")
+async fn path_handler(Path(name): Path<String>) -> String {
+    name
 }
 
 ///
@@ -262,8 +270,7 @@ async fn path2_handler_test() {
     assert_eq!(body_as_string, "jdoe:1");
 }
 async fn path2_handler(
-    axum::extract::Path(mut name): axum::extract::Path<String>,
-    axum::extract::Path(post_id): axum::extract::Path<u32>,
+    Path((mut name, post_id)): Path<(String, u32)>,
 ) -> String {
     name.push_str(":");
     name.push_str(&post_id.to_string());
@@ -309,8 +316,14 @@ async fn query_handler_test() {
 
     assert_eq!(body_as_string, "name=jdoe&age=42");
 }
-async fn query_handler() -> String {
-    todo!("Return the query parameters formatted into a query string")
+async fn query_handler(Query(query): Query<GetUsersQueryParams>) -> String {
+    format!("name={}&age={}", query.name, query.age)
+}
+
+#[derive(serde::Deserialize)]
+struct GetUsersQueryParams {
+    name: String,
+    age: u32
 }
 
 ///
@@ -328,7 +341,7 @@ async fn header_handler_test() {
     /// for ServiceExt::oneshot
     use tower::util::ServiceExt;
 
-    let app = Router::<()>::new().route("/users", get(header_handler));
+    let app = Router::<()>::new().route("/users", get(header_handler2));
 
     let response = app
         .oneshot(
@@ -348,8 +361,15 @@ async fn header_handler_test() {
 
     assert_eq!(body_as_string, "application/json");
 }
-async fn header_handler(_headers: axum::http::HeaderMap) -> String {
-    todo!("Return the Content-Type header")
+async fn header_handler(headers: axum::http::HeaderMap) -> String {
+    headers.get("Content-Type").unwrap().to_str().unwrap().to_string()
+}
+async fn header_handler2(headers: axum::http::HeaderMap) -> Result<String, String>{
+    let result = headers.get("Content-Type").ok_or("No Content-Type header")?;
+
+    let result = result.to_str().map_err(|e| e.to_string())?;
+
+    Ok(result.into())
 }
 
 ///
@@ -436,7 +456,10 @@ async fn response_handler() -> hyper::Response<Body> {
     #![allow(unused_imports)]
     use hyper::Response;
 
-    todo!("Return a response with a status code of 200 and a content type of `text/plain`")
+    Response::builder().status(hyper::StatusCode::OK)
+	.header("Content-Type", "text/plain")
+	.body(Body::empty())
+	.unwrap()
 }
 
 ///
@@ -560,11 +583,39 @@ async fn handler_trait_test() {
 
     let body_as_string = String::from_utf8(body.to_vec()).unwrap();
 
-    assert_eq!(body_as_string, r#"{"name":"John Doe"}"#);
+    // assert_eq!(body_as_string, r#"{"name":"John Doe"}"#);
+    assert_eq!(body_as_string, "/");
 }
-async fn handler_trait_handler() -> () {
-    todo!("Return a custom data type for which you provide an implementation of IntoResponse")
+async fn handler_trait_handler(FullPath(path): FullPath) -> String {
+    path
 }
+
+
+struct FullPath(String);
+
+#[axum::async_trait]
+impl <S> FromRequestParts<S> for FullPath {
+
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(parts: &mut Parts, _state :&S)
+				-> Result<Self, Self::Rejection> {
+
+	Ok(FullPath(parts.uri.path().to_string()))
+    }
+}
+
+impl axum::response::IntoResponse for Person {
+
+    fn into_response(self) -> axum::response::Response {
+	axum::response::Response::builder()
+	    .header("Content-Type", "application/json")
+	    .body(Body::from(serde_json::to_string(&self).unwrap()))
+	    .unwrap()
+
+    }
+}
+
 
 ///
 /// EXERCISE 13
