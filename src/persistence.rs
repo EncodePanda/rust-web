@@ -34,6 +34,7 @@
 //!
 
 use sqlx::{postgres::PgPoolOptions, Postgres};
+use sqlx::types::time::PrimitiveDateTime;
 
 ///
 /// EXERCISE 1
@@ -66,15 +67,16 @@ async fn query_playground() {
 ///
 #[tokio::test]
 async fn select_one_plus_one() {
-    let _pool = PgPoolOptions::new()
+    let pool = PgPoolOptions::new()
         .max_connections(1)
         .connect(&std::env::var("DATABASE_URL").unwrap())
         .await
         .unwrap();
 
-    let _sum: i32 = todo!("Insert row here");
+    let sum: i32 = sqlx::query!("SELECT 1 + 1 AS sum").fetch_one(&pool)
+	          .await.unwrap().sum.unwrap();
 
-    assert_eq!(_sum, 2);
+    assert_eq!(sum, 2);
 }
 
 ///
@@ -89,14 +91,20 @@ async fn select_one_plus_one() {
 /// What do you notice about the type of the row?
 ///
 #[tokio::test]
-async fn select_star() {
-    let _pool = PgPoolOptions::new()
+async fn select_starr() {
+    let pool = PgPoolOptions::new()
         .max_connections(1)
         .connect(&std::env::var("DATABASE_URL").unwrap())
         .await
         .unwrap();
 
-    todo!("Insert query here");
+
+    let todos = sqlx::query!("SELECT * from todos").fetch_all(&pool)
+	          .await.unwrap();
+
+    for todo in todos {
+      println!("{:?}", todo);
+    }
 
     assert!(true);
 }
@@ -117,7 +125,7 @@ async fn select_star() {
 ///
 #[tokio::test]
 async fn insert_todo() {
-    let _pool = PgPoolOptions::new()
+    let pool = PgPoolOptions::new()
         .max_connections(1)
         .connect(&std::env::var("DATABASE_URL").unwrap())
         .await
@@ -126,6 +134,12 @@ async fn insert_todo() {
     let _title = "Learn SQLx";
     let _description = "I should really learn SQLx for my Axum web app";
     let _done = false;
+
+    let _id =
+	sqlx::query!("insert into todos(title, description, done) values($1, $2, $3) RETURNING id", _title, _description, _done)
+	.fetch_one(&pool)
+	.await.unwrap()
+	.id;
 
     assert!(true);
 }
@@ -140,15 +154,18 @@ async fn insert_todo() {
 ///
 #[tokio::test]
 async fn update_todo() {
-    let _pool = PgPoolOptions::new()
+    let pool = PgPoolOptions::new()
         .max_connections(1)
         .connect(&std::env::var("DATABASE_URL").unwrap())
         .await
         .unwrap();
 
-    let _id = 1;
+    let _id = 2;
     let _done = true;
 
+    sqlx::query!("update todos set done = $1 where id = $2", _done, _id)
+	.execute(&pool)
+	.await.unwrap();
     assert!(true);
 }
 
@@ -186,15 +203,29 @@ async fn delete_todo() {
 ///
 #[tokio::test]
 async fn select_star_as() {
-    let _pool = PgPoolOptions::new()
+    let pool = PgPoolOptions::new()
         .max_connections(1)
         .connect(&std::env::var("DATABASE_URL").unwrap())
         .await
         .unwrap();
 
-    todo!("Insert query here");
+    let todos = sqlx::query_as!(Todo, "SELECT * from todos").fetch_all(&pool)
+	          .await.unwrap();
+
+    for todo in todos {
+      println!("{:?}", todo);
+    }
 
     assert!(true);
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct Todo {
+    id: i64,
+    title: String,
+    description: String,
+    done: bool,
+    created_at: PrimitiveDateTime
 }
 
 ///

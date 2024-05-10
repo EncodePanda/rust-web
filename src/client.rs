@@ -14,6 +14,8 @@
 //! nicely into your Axum web applications.
 //!
 
+use axum::extract::Path;
+use axum::extract::State;
 use axum::{
     body::Body,
     http::{Method, Request},
@@ -21,6 +23,9 @@ use axum::{
     routing::*,
     Json, Router,
 };
+
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 ///
 /// EXERCISE 1
@@ -50,7 +55,15 @@ pub async fn cat_fact_server() {
     axum::serve(listener, app).await.unwrap();
 }
 async fn cat_fact_handler() -> Html<String> {
-    todo!("Using reqwest::get and .json, get a random cat fact from https://catfact.ninja/fact and return it as an HTML response.")
+    let response = reqwest::get("https://catfact.ninja/fact")
+	.await
+	.unwrap()
+	.json::<CatFact>()
+	.await
+	.unwrap();
+
+    Html(format!("{}", response.fact))
+
 }
 #[derive(serde::Deserialize)]
 struct CatFact {
@@ -94,9 +107,13 @@ struct CatFact {
 /// set the body of a request using the `.body` method.`
 ///
 async fn posts_server() {
-    let app = Router::<()>::new();
 
-    let _client = reqwest::Client::new();
+    let client = reqwest::Client::new();
+
+    let app = Router::new()
+	        .route("/posts", get(get_posts))
+	        .route("/posts/:id", get(delete_post))
+                .with_state(client);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
         .await
@@ -106,6 +123,25 @@ async fn posts_server() {
 
     axum::serve(listener, app).await.unwrap();
 }
+
+async fn get_posts(State(client) : State<reqwest::Client>) -> Json<Vec<Post>> {
+    let response = client.get("https://jsonplaceholder.typicode.com/posts")
+	.send()
+	.await
+	.unwrap()
+	.json::<Vec<Post>>()
+	.await
+	.unwrap();
+    Json(response)
+}
+
+async fn delete_post(State(client) : State<reqwest::Client>
+		     , Path(post_id): Path<u32>) -> () {
+    let url = format!("https://jsonplaceholder.typicode.com/posts/{}"
+		      , post_id.to_string());
+    client.delete(url).send().await.unwrap();
+}
+
 #[derive(serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Post {
