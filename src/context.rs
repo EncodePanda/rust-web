@@ -437,8 +437,25 @@ async fn extension_gbp_to_usd_handler() -> String {
 /// Place it into a web server and test to ensure it meets your requirements.
 ///
 
+#[derive(Clone)]
 struct UsersState {
   users: Arc<Mutex<HashMap<u64, UserWithoutId>>>
+}
+
+impl UsersState {
+
+    fn new() -> Self {
+        todo!("TODO")
+    }
+
+    fn create_user(&self, _user_req: UserWithoutId) -> u64 {
+        todo!("TODO")
+    }
+
+    fn get_users(&self) -> Vec<User> {
+        todo!("TODO")
+    }
+
 }
 
 
@@ -485,7 +502,7 @@ async fn run_users_server() {
 	.route("/users", get (get_users))
 	.route("/users/:id", get (get_user))
 	.route("/users/", post (create_user))
-	.with_state(());
+	.with_state(UsersState::new());
 
     // run it
     let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
